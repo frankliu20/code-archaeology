@@ -1,6 +1,8 @@
 .vscode/**
 .vscode-test/**
 src/**
+out/smoke.js
+out/smoke.js.map
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md

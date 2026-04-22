@@ -1,100 +1,142 @@
 /**
  * PR enrichment via the `gh` CLI.
  *
- * For each commit we attempt to find the associated PR. Strategy:
- *   1. If commit subject contains "(#NNN)" or "Merge pull request #NNN", use that.
- *   2. Otherwise call `gh pr list --search <sha>` to discover the PR.
+ * Strategy (rewritten in v0.0.2):
+ *   1. Detect repo slug (owner/name) once via `gh repo view`.
+ *   2. Fetch all unknown PRs in a single GraphQL request using aliased
+ *      `repository.object(oid:)` lookups. This collapses N round-trips
+ *      into 1 (≈10× speedup on a 30-commit history).
  *
- * Results are cached in-memory for the lifetime of the extension host
- * (the more durable on-disk cache from PRD §9.2 is M1 work).
+ * Negative results (commit has no associated PR) are returned as null so
+ * the caller can cache them and avoid re-asking.
  */
 
 import { spawn } from 'node:child_process';
-import { CommitInfo, PRInfo } from './types';
+import { PRInfo } from './types';
 
-const cache = new Map<string, PRInfo | null>();
+/** Max SHAs per GraphQL request — keeps the query under arg-length limits. */
+const BATCH_SIZE = 30;
 
-export interface EnrichOptions {
-  repoRoot: string;
-  /** Whether the gh CLI is available + authenticated. */
-  ghAvailable: boolean;
+export interface RepoSlug {
+  owner: string;
+  name: string;
+}
+
+export async function checkGhAvailable(): Promise<boolean> {
+  try {
+    await runGh(process.cwd(), ['auth', 'status']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function detectRepoSlug(repoRoot: string): Promise<RepoSlug | undefined> {
+  try {
+    const out = await runGh(repoRoot, ['repo', 'view', '--json', 'owner,name']);
+    const j = JSON.parse(out) as { owner: { login: string }; name: string };
+    return { owner: j.owner.login, name: j.name };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
- * Best-effort PR lookup. Returns undefined if no PR found or gh unavailable.
+ * Fetch PR metadata for many commit SHAs in a single GraphQL request
+ * (chunked into BATCH_SIZE-sized queries when needed).
+ *
+ * Returns a map sha → PRInfo|null. SHAs with no associated PR map to null.
+ * SHAs that errored out are simply absent from the map (caller can decide
+ * whether to retry individually or treat as "unknown").
  */
-export async function lookupPR(
-  commit: CommitInfo,
-  opts: EnrichOptions,
-): Promise<PRInfo | undefined> {
-  if (!opts.ghAvailable) return undefined;
+export async function batchFetchPRs(
+  repoRoot: string,
+  slug: RepoSlug,
+  shas: string[],
+): Promise<Map<string, PRInfo | null>> {
+  const result = new Map<string, PRInfo | null>();
+  if (shas.length === 0) return result;
 
-  const cacheKey = `${opts.repoRoot}::${commit.sha}`;
-  if (cache.has(cacheKey)) {
-    return cache.get(cacheKey) ?? undefined;
+  for (let i = 0; i < shas.length; i += BATCH_SIZE) {
+    const chunk = shas.slice(i, i + BATCH_SIZE);
+    try {
+      const partial = await fetchChunk(repoRoot, slug, chunk);
+      for (const [sha, pr] of partial) result.set(sha, pr);
+    } catch {
+      // Best-effort: skip the failed chunk; the caller will still get
+      // events for cache hits + other chunks.
+    }
   }
 
-  let prNumber = commit.prNumberFromMessage;
-
-  if (!prNumber) {
-    prNumber = await searchPRBySha(opts.repoRoot, commit.sha);
-  }
-
-  if (!prNumber) {
-    cache.set(cacheKey, null);
-    return undefined;
-  }
-
-  const pr = await fetchPR(opts.repoRoot, prNumber);
-  cache.set(cacheKey, pr ?? null);
-  return pr ?? undefined;
+  return result;
 }
 
-async function searchPRBySha(repoRoot: string, sha: string): Promise<number | undefined> {
-  try {
-    const out = await runGh(repoRoot, [
-      'pr', 'list',
-      '--search', sha,
-      '--state', 'all',
-      '--json', 'number',
-      '--limit', '1',
-    ]);
-    const arr = JSON.parse(out) as Array<{ number: number }>;
-    return arr[0]?.number;
-  } catch {
-    return undefined;
-  }
+async function fetchChunk(
+  repoRoot: string,
+  slug: RepoSlug,
+  shas: string[],
+): Promise<Map<string, PRInfo | null>> {
+  const aliases = shas.map((sha, i) => buildAlias(`c${i}`, sha)).join('\n');
+  const query = `query { repository(owner: "${slug.owner}", name: "${slug.name}") { ${aliases} } }`;
+
+  const out = await runGh(repoRoot, ['api', 'graphql', '-f', `query=${query}`]);
+  const parsed = JSON.parse(out) as {
+    data?: { repository?: Record<string, GraphqlCommitNode | null> };
+  };
+
+  const result = new Map<string, PRInfo | null>();
+  shas.forEach((sha, i) => {
+    const node = parsed?.data?.repository?.[`c${i}`];
+    const pr = node?.associatedPullRequests?.nodes?.[0];
+    if (pr) {
+      result.set(sha, {
+        number: pr.number,
+        title: pr.title,
+        body: pr.body ?? '',
+        url: pr.url,
+        author: pr.author?.login ?? 'unknown',
+        mergedAt: pr.mergedAt ?? undefined,
+        linkedIssues: parseLinkedIssues(pr.body ?? ''),
+        labels: (pr.labels?.nodes ?? []).map(l => l.name),
+      });
+    } else if (node !== undefined) {
+      // node === null also counts as a deterministic "no PR" answer.
+      result.set(sha, null);
+    }
+  });
+  return result;
 }
 
-async function fetchPR(repoRoot: string, prNumber: number): Promise<PRInfo | undefined> {
-  try {
-    const out = await runGh(repoRoot, [
-      'pr', 'view', String(prNumber),
-      '--json', 'number,title,body,url,author,mergedAt,labels',
-    ]);
-    const raw = JSON.parse(out) as {
+function buildAlias(alias: string, sha: string): string {
+  return `${alias}: object(oid: "${sha}") {
+    ... on Commit {
+      associatedPullRequests(first: 1, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes {
+          number
+          title
+          body
+          url
+          mergedAt
+          author { login }
+          labels(first: 10) { nodes { name } }
+        }
+      }
+    }
+  }`;
+}
+
+interface GraphqlCommitNode {
+  associatedPullRequests?: {
+    nodes?: Array<{
       number: number;
       title: string;
-      body: string;
+      body: string | null;
       url: string;
-      author: { login?: string };
-      mergedAt?: string;
-      labels?: Array<{ name: string }>;
-    };
-
-    return {
-      number: raw.number,
-      title: raw.title,
-      body: raw.body ?? '',
-      url: raw.url,
-      author: raw.author?.login ?? 'unknown',
-      mergedAt: raw.mergedAt,
-      linkedIssues: parseLinkedIssues(raw.body ?? ''),
-      labels: (raw.labels ?? []).map(l => l.name),
-    };
-  } catch {
-    return undefined;
-  }
+      mergedAt: string | null;
+      author: { login?: string } | null;
+      labels?: { nodes?: Array<{ name: string }> };
+    }>;
+  };
 }
 
 function parseLinkedIssues(body: string): number[] {
@@ -105,15 +147,6 @@ function parseLinkedIssues(body: string): number[] {
     out.push(Number(m[1]));
   }
   return out;
-}
-
-export async function checkGhAvailable(): Promise<boolean> {
-  try {
-    await runGh(process.cwd(), ['auth', 'status']);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function runGh(cwd: string, args: string[]): Promise<string> {
@@ -128,7 +161,7 @@ function runGh(cwd: string, args: string[]): Promise<string> {
     proc.on('error', reject);
     proc.on('close', code => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`gh ${args.join(' ')} exited ${code}: ${stderr.trim()}`));
+      else reject(new Error(`gh ${args.slice(0, 2).join(' ')} exited ${code}: ${stderr.trim()}`));
     });
   });
 }

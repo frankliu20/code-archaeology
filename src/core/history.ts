@@ -156,6 +156,20 @@ function runGit(cwd: string, args: string[]): Promise<string> {
       windowsHide: true,
     });
 
+    proc.on('error', err => {
+      // On Windows, a non-existent cwd surfaces as an ENOENT against the
+      // spawned binary, which is misleading. Detect and rewrite.
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT' && e.syscall === 'spawn git') {
+        reject(new Error(
+          `Could not run \`git\`. Either git is not on PATH or the working ` +
+          `directory does not exist (cwd=${cwd}).`,
+        ));
+      } else {
+        reject(err);
+      }
+    });
+
     let stdout = '';
     let stderr = '';
     proc.stdout.setEncoding('utf8');
@@ -163,7 +177,6 @@ function runGit(cwd: string, args: string[]): Promise<string> {
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
 
-    proc.on('error', reject);
     proc.on('close', code => {
       if (code === 0) resolve(stdout);
       else reject(new Error(`git ${args.join(' ')} exited ${code}: ${stderr.trim()}`));

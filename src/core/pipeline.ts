@@ -1,13 +1,14 @@
 /**
  * Streaming pipeline orchestrating history fetch -> noise filter -> PR enrichment.
  *
+ * v0.0.2 changes:
+ *   - Persistent on-disk cache (PRCache) keyed by repo slug + commit SHA.
+ *   - Batch GraphQL PR fetch instead of per-commit `gh pr view`.
+ *   - Cache hits are emitted before any network call, so the Answer event
+ *     fires almost instantly on warm runs.
+ *
  * Yields AnalysisEvent values in the order the UI should consume them
  * (see PRD §6.1.3 streaming protocol).
- *
- * M0 has no LLM analysis. The "answer" event is a deterministic, rule-based
- * synthesis derived from the most-recent significant commit + its PR. This is
- * intentionally cautious in wording ("Most recently…") and reports a low
- * confidence (2/5) so users understand it is not yet AI-generated.
  */
 
 import {
@@ -15,10 +16,12 @@ import {
   ArchaeologyResult,
   EnrichedCommit,
   InvestigationTarget,
+  PRInfo,
 } from './types';
 import { fetchHistory } from './history';
 import { classifyNoise } from './filter';
-import { checkGhAvailable, lookupPR } from './enrich';
+import { batchFetchPRs, checkGhAvailable, detectRepoSlug, RepoSlug } from './enrich';
+import { PRCache } from './cache';
 
 export interface PipelineOptions {
   maxCommits?: number;
@@ -49,8 +52,8 @@ export async function* investigate(
     commit,
     noiseReason: classifyNoise(commit),
   }));
-
   const significant = enriched.filter(e => !e.noiseReason);
+
   yield {
     kind: 'commits-found',
     total: enriched.length,
@@ -66,46 +69,80 @@ export async function* investigate(
     };
     yield {
       kind: 'done',
-      result: {
-        target,
-        commits: [],
-        totalCommitsFound: 0,
-        noiseFilteredCount: 0,
-      },
+      result: { target, commits: [], totalCommitsFound: 0, noiseFilteredCount: 0 },
     };
     return;
   }
 
-  yield { kind: 'progress', message: 'Checking GitHub CLI…' };
+  // ---------- Resolve PR data: cache first, then a single batch fetch ----------
   const ghAvailable = await checkGhAvailable();
-  if (!ghAvailable) {
+  let slug: RepoSlug | undefined;
+  let cache: PRCache | undefined;
+
+  if (ghAvailable) {
+    slug = await detectRepoSlug(target.repoRoot);
+    if (slug) {
+      cache = new PRCache(`${slug.owner}__${slug.name}`);
+      await cache.load();
+    }
+  } else {
     yield {
       kind: 'progress',
       message: '`gh` CLI not authenticated — PR enrichment skipped.',
     };
   }
 
-  // Enrich significant commits in order, streaming each as it completes.
-  // We deliberately go sequential to keep GitHub API rate limits low for M0.
+  // Resolve cache hits and identify misses.
+  const missingShas: string[] = [];
+  if (cache) {
+    for (const item of significant) {
+      const cached = cache.get(item.commit.sha);
+      if (cached === undefined) {
+        missingShas.push(item.commit.sha);
+      } else if (cached !== null) {
+        item.pr = cached;
+      }
+    }
+    if (missingShas.length === 0 && significant.length > 0) {
+      yield { kind: 'progress', message: `All ${significant.length} PRs from cache.` };
+    } else if (missingShas.length < significant.length) {
+      const hits = significant.length - missingShas.length;
+      yield {
+        kind: 'progress',
+        message: `${hits} from cache, fetching ${missingShas.length} PR${missingShas.length === 1 ? '' : 's'}…`,
+      };
+    }
+  }
+
+  // Batch-fetch the misses in a single GraphQL request (chunked under the hood).
+  if (cache && slug && missingShas.length > 0) {
+    if (!cache.size()) {
+      yield { kind: 'progress', message: `Fetching ${missingShas.length} PRs…` };
+    }
+    const fetched = await batchFetchPRs(target.repoRoot, slug, missingShas);
+    for (const sha of missingShas) {
+      const v = fetched.get(sha);
+      if (v !== undefined) cache.set(sha, v);
+    }
+    // Apply fetched results onto significant commits.
+    const byShaMap = new Map<string, PRInfo | null | undefined>();
+    for (const sha of missingShas) byShaMap.set(sha, fetched.get(sha));
+    for (const item of significant) {
+      const v = byShaMap.get(item.commit.sha);
+      if (v) item.pr = v;
+    }
+    await cache.flush();
+  }
+
+  // ---------- Stream commit-enriched events in chronological-recent order ----------
   for (let i = 0; i < significant.length; i++) {
     const item = significant[i];
-    yield {
-      kind: 'progress',
-      message: `Fetching PR for ${item.commit.shortSha}…`,
-    };
-    item.pr = await lookupPR(item.commit, {
-      repoRoot: target.repoRoot,
-      ghAvailable,
-    });
     yield {
       kind: 'commit-enriched',
       commit: item,
       index: i + 1,
       total: significant.length,
     };
-
-    // Emit a tentative answer based on the first (most recent) significant commit
-    // so the UI can populate Layer 1 ASAP.
     if (i === 0) {
       yield buildTentativeAnswer(item);
     }
