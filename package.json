@@ -8,13 +8,13 @@
   "author": {
     "name": "haital"
   },
-  "homepage": "https://github.com/haital/code-archaeology#readme",
+  "homepage": "https://github.com/frankliu20/code-archaeology#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/haital/code-archaeology.git"
+    "url": "https://github.com/frankliu20/code-archaeology.git"
   },
   "bugs": {
-    "url": "https://github.com/haital/code-archaeology/issues"
+    "url": "https://github.com/frankliu20/code-archaeology/issues"
   },
   "keywords": [
     "git",
