@@ -1,0 +1,51 @@
+{
+  "name": "code-archaeology",
+  "displayName": "Code Archaeologist",
+  "description": "Point at any code, get a one-line answer to 'why is this here?' — backed by commits, PRs, and issues.",
+  "version": "0.0.1",
+  "publisher": "haital",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeArchaeology.investigateSelection",
+        "title": "🏺 Why is this here?",
+        "category": "Archaeology"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codeArchaeology.investigateSelection",
+        "key": "ctrl+shift+y",
+        "mac": "cmd+shift+y",
+        "when": "editorHasSelection || editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codeArchaeology.investigateSelection",
+          "group": "navigation@99",
+          "when": "editorTextFocus"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
