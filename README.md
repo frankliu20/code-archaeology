@@ -35,6 +35,45 @@ browser. **Code Archaeologist compresses that into one keystroke.**
 
 ---
 
+## Install
+
+This extension isn't on the Marketplace yet. You can install it from a
+locally-built `.vsix` package today:
+
+### Option 1 — download a pre-built `.vsix` (recommended)
+
+Grab the latest `.vsix` from the [Releases](https://github.com/frankliu20/code-archaeology/releases)
+page on GitHub, then install it with one of:
+
+```sh
+# from the command line
+code --install-extension code-archaeology-<version>.vsix
+```
+
+…or in VS Code: open the **Extensions** view → click the **⋯** menu in
+the top-right → **Install from VSIX…** → pick the file.
+
+### Option 2 — build it yourself
+
+Requires Node.js ≥ 18.
+
+```sh
+git clone https://github.com/frankliu20/code-archaeology.git
+cd code-archaeology
+npm install
+npm run package      # produces code-archaeology-<version>.vsix
+code --install-extension code-archaeology-*.vsix
+```
+
+> `npm run package` shells out to [`@vscode/vsce`](https://github.com/microsoft/vscode-vsce)
+> via `npx`, so no global install is needed.
+
+After installing, reload VS Code if it doesn't pick the extension up
+automatically. The first run will offer to authenticate `gh` if you
+haven't already.
+
+---
+
 ## Requirements
 
 - **VS Code** ≥ 1.85
