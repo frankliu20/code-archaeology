@@ -1,141 +1,175 @@
 # 🏺 Code Archaeologist
 
-> Point at any code, get a one-line answer to **"why is this here?"** —
-> backed by commits, PRs, and issues.
+> Point at any line of code in your editor and get a one-line answer to
+> **"why is this here?"** — backed by commits, pull requests, and issues.
 
-Status: **M0 PoC** (per [PRD v0.3](../prd/code-archaeologist.md)).
-This release wires up the editor → side-panel UX with streaming git +
-GitHub PR data. **No LLM yet** — the "answer" is a deterministic synthesis
-of the most recent significant commit + its PR, marked with low confidence
-(2–3 / 5). LLM-generated answers are M1.
+`git blame` answers *who*. PR pages answer *what*. Nothing answers
+*why* without four to six manual hops between editor, terminal, and
+browser. **Code Archaeologist compresses that into one keystroke.**
 
----
-
-## What works today (M0)
-
-- VS Code command **🏺 Why is this here?** (`Cmd/Ctrl+Shift+Y` or right-click)
-- Streaming side panel with the three-layer structure from the PRD:
-  - **💡 Answer** (tentative, rule-based)
-  - **📎 Key Evidence** (top 3 commits with PR title + body excerpt)
-  - **▾ Full Timeline** (collapsed, with noise commits dimmed)
-- Live progress reporting (status line at the bottom)
-- Noise filter: merge / dependabot / format-only / rename-only commits
-- PR enrichment via the local `gh` CLI (uses your existing auth)
-- **Single-batch GraphQL PR fetch** (one network round-trip for ≤30 commits)
-- **Persistent cache** at `~/.git-archaeology/cache/<owner>__<repo>.json`
-  with 7-day TTL — warm runs hit ~1s end-to-end
-- **Copy as PR comment** button — generates a Markdown snippet for sharing
-- Cross-file rename tracking comes via `git log --follow` (M1)
-
-## What's intentionally missing (will come in M1+)
-
-- LLM-generated answers with source spans
-- Confidence ≥ 4 / 5
-- Codelens "🏺 Why?" auto-prompt
-- Hover tooltip
-- Standalone CLI (`git-archaeology`)
-- Overdue-TODO detection
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.85-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 
 ---
 
-## Try it
+## Features
 
-### Prerequisites
-- Node.js ≥ 18
-- `git` ≥ 2.30 (on PATH)
-- [`gh`](https://cli.github.com/) authenticated (`gh auth login`) — *optional but recommended*
+- **One-shot investigation** — select code, press `Cmd/Ctrl+Shift+Y`,
+  get a streaming side panel.
+- **Three-layer answer** — a one-sentence verdict on top, the most
+  relevant PR/commit evidence under it, and the full timeline tucked
+  into a collapsed section.
+- **Single-batch GraphQL** PR fetch — one network round-trip for up to
+  30 commits at a time.
+- **Persistent cache** at `~/.git-archaeology/cache/` with a 7-day TTL.
+  Warm runs typically complete in ≈ 1 second.
+- **Noise filter** — merge / dependabot / format-only / rename-only
+  commits are dimmed, never silently dropped.
+- **Copy as PR comment** — turn any investigation into a Markdown
+  snippet ready to paste into a code review.
 
-### Run from source
+> The Answer text is currently a rule-based synthesis of the most
+> recent significant commit and its PR (confidence 2–3 / 5). LLM-backed
+> answers with explicit source spans are next on the
+> [roadmap](./ROADMAP.md).
 
-```powershell
-cd code-archaeology
+---
+
+## Requirements
+
+- **VS Code** ≥ 1.85
+- **git** ≥ 2.30 on `PATH`
+- **[`gh`](https://cli.github.com/)** authenticated (`gh auth login`) —
+  optional but strongly recommended; without it the panel still shows
+  commits but no PR enrichment.
+
+---
+
+## Usage
+
+1. Open any git-tracked file.
+2. Select the lines you're curious about (or just place the cursor on a
+   single line).
+3. Trigger the investigation:
+   - **Keybinding** — `Ctrl+Shift+Y` (Windows / Linux),
+     `Cmd+Shift+Y` (macOS).
+   - **Editor right-click** → **🏺 Why is this here?**
+   - **Command Palette** → **Archaeology: 🏺 Why is this here?**
+4. The side panel opens and starts streaming. The first answer typically
+   appears within 2–3 seconds on a cold run, ≈ 1 second on a warm run.
+
+### Acting on the result
+
+- Click any **PR / commit link** to open it in the browser.
+- Hit **📋 Copy as PR comment** to grab a Markdown snippet you can
+  paste into a code review.
+- Hit **👎 This explanation is wrong** to flag inaccurate output (used
+  later for prompt tuning once LLM answers land — see roadmap).
+
+---
+
+## How it works
+
+```
+selection
+   │
+   ▼
+git log -L <start>,<end>:<file>      # line-range history
+   │
+   ▼
+noise filter (merge / bot / format)  # dim, don't drop
+   │
+   ▼
+PR cache lookup                      # ~/.git-archaeology/cache/
+   │       │
+   │       └─► cache miss ──► single GraphQL request
+   │                          (aliased object(oid:) per commit)
+   │
+   ▼
+async event stream → side panel
+  ├── progress         (status line)
+  ├── commits-found    (counts in the timeline header)
+  ├── commit-enriched  (Evidence + Timeline rows)
+  ├── answer           (Layer 1, fires after first enrichment)
+  └── done
+```
+
+The pipeline is an `AsyncGenerator<AnalysisEvent>` so the panel can
+render progressively instead of waiting for the full analysis to
+complete.
+
+---
+
+## Develop
+
+```sh
 npm install
 npm run compile
 ```
 
-Then in VS Code:
-1. Open this folder.
-2. Press `F5` ("Run Extension"). A second VS Code window opens — the
-   **Extension Development Host**.
-3. In that window, open any **git-tracked file** in any repo.
-4. Select a few lines.
-5. Press `Cmd+Shift+Y` (`Ctrl+Shift+Y` on Windows / Linux), or right-click →
-   **🏺 Why is this here?**
-6. The side panel opens and starts streaming.
+Then open this folder in VS Code and press **F5** ("Run Extension").
+A second VS Code window opens — the **Extension Development Host** —
+in which the extension is installed for testing.
 
-### Smoke test (no VS Code)
+### Headless smoke test
 
-```powershell
+```sh
 npm run compile
 node out/smoke.js <path/to/file> <startLine> <endLine>
 ```
 
-Example:
+Useful for verifying the core pipeline without launching VS Code.
 
-```powershell
-node out/smoke.js src/core/pipeline.ts 1 30
-```
-
----
-
-## Project layout
+### Project layout
 
 ```
 code-archaeology/
-├── package.json              # extension manifest
-├── tsconfig.json
 ├── src/
 │   ├── extension.ts          # VS Code entry point
 │   ├── smoke.ts              # CLI smoke test (not shipped)
 │   ├── core/                 # framework-agnostic logic
 │   │   ├── types.ts          # CommitInfo / PRInfo / AnalysisEvent
-│   │   ├── history.ts        # `git log -L` + parsing
+│   │   ├── history.ts        # git log -L parsing
 │   │   ├── enrich.ts         # batch GraphQL PR fetch
-│   │   ├── cache.ts          # ~/.git-archaeology/cache JSON store
+│   │   ├── cache.ts          # ~/.git-archaeology cache
 │   │   ├── filter.ts         # noise classification
-│   │   └── pipeline.ts       # async generator orchestrating the above
+│   │   └── pipeline.ts       # streaming orchestrator
 │   └── webview/
 │       ├── panel.ts          # webview lifecycle
-│       └── ui.ts             # vanilla HTML+JS (CSP-safe, no framework)
-└── .vscode/
-    ├── launch.json           # F5 = Run Extension
-    └── tasks.json            # `npm: compile`
+│       └── ui.ts             # CSP-safe HTML+JS (no framework)
+├── ROADMAP.md
+├── CHANGELOG.md
+└── LICENSE
 ```
 
-### Streaming protocol
+---
 
-The core pipeline is an `AsyncGenerator<AnalysisEvent>`. Events the UI consumes:
+## Privacy
 
-| Event | When | UI effect |
-|---|---|---|
-| `progress` | Whenever a step starts | Status line at the bottom |
-| `commits-found` | After `git log -L` finishes | Timeline header count |
-| `commit-enriched` | After each PR fetch | Append to Evidence + Timeline |
-| `answer` | After first significant commit is enriched | Fill Layer 1 |
-| `done` | All commits enriched | Final counts; appends noise rows |
-| `error` | Any fatal failure | Red status line |
-
-This is what gives the panel its **"answer ≤ 5s"** behavior even though the
-full enrichment takes longer — the answer fires off the first enriched commit
-while the rest stream in behind it.
+- All git operations run locally.
+- PR data is fetched through your local `gh` CLI using your existing
+  GitHub auth — credentials never leave that channel.
+- Cache files live under `~/.git-archaeology/` and contain only
+  metadata GitHub already returned to you (PR title, body, author,
+  labels). Delete the directory at any time to wipe state.
+- No telemetry. No outbound calls beyond `git` and `gh`.
+- LLM integration (M1) will be **off by default** and gated behind an
+  explicit "private mode" toggle.
 
 ---
 
-## Known issues / rough edges (M0)
+## Roadmap
 
-- Noise filter is subject-string heuristics; full-diff whitespace detection
-  is M1.
-- "Copy as PR comment" relies on `navigator.clipboard` inside the webview —
-  may require a click in some VS Code builds.
-- The "answer" wording is intentionally cautious ("Most recently changed by…")
-  because there is no LLM yet. Don't trust it as a real *why*.
+The next milestones are tracked in [`ROADMAP.md`](./ROADMAP.md).
+Highlights:
+
+- **M1** — LLM-generated answers with source spans and 5/5 confidence.
+- **M2** — Standalone `git-archaeology` CLI for PR review bots.
+- **M3** — Codelens, hover, overdue-TODO detection.
+- **M4** — Share links, GitLab/Bitbucket, JetBrains.
 
 ---
 
-## Why this exists
+## License
 
-See [`../prd/code-archaeologist.md`](../prd/code-archaeologist.md) for the
-full PRD. Short version:
-
-> `git blame` answers **who**. PR pages answer **what**. Nothing answers
-> **why** without 4–6 manual hops. We compress that into one keystroke.
+[MIT](./LICENSE) © 2026 haital

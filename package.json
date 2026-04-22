@@ -2,12 +2,34 @@
   "name": "code-archaeology",
   "displayName": "Code Archaeologist",
   "description": "Point at any code, get a one-line answer to 'why is this here?' — backed by commits, PRs, and issues.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "haital",
+  "license": "MIT",
+  "author": {
+    "name": "haital"
+  },
+  "homepage": "https://github.com/haital/code-archaeology#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haital/code-archaeology.git"
+  },
+  "bugs": {
+    "url": "https://github.com/haital/code-archaeology/issues"
+  },
+  "keywords": [
+    "git",
+    "blame",
+    "history",
+    "archaeology",
+    "pull requests",
+    "code review",
+    "github"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
+    "SCM Providers",
     "Other"
   ],
   "main": "./out/extension.js",
@@ -41,6 +63,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "smoke": "node out/smoke.js",
+    "package": "vsce package",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
