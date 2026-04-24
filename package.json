@@ -2,7 +2,7 @@
   "name": "code-archaeology",
   "displayName": "Code Archaeologist",
   "description": "Point at any code, get a one-line answer to 'why is this here?' — backed by commits, PRs, and issues.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "frankliu20",
   "license": "MIT",
   "author": {
