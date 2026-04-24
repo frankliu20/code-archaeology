@@ -8,7 +8,9 @@
 browser. **Code Archaeologist compresses that into one keystroke.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.85-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/frankliu20.code-archaeology?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=frankliu20.code-archaeology)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/frankliu20.code-archaeology?label=Installs&color=green)](https://marketplace.visualstudio.com/items?itemName=frankliu20.code-archaeology)
+[![CI](https://github.com/frankliu20/code-archaeology/actions/workflows/ci.yml/badge.svg)](https://github.com/frankliu20/code-archaeology/actions/workflows/ci.yml)
 
 ---
 

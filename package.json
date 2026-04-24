@@ -5,6 +5,7 @@
   "version": "0.1.2",
   "publisher": "frankliu20",
   "license": "MIT",
+  "icon": "media/icon.png",
   "author": {
     "name": "Frank Liu"
   },
